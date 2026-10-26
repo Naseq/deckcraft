@@ -48,8 +48,9 @@ fn a_tags_part_listed_many_times_is_copied_once_and_capped() {
     }
     let mut p = s.doc().expect("doc").doc.as_ref().clone();
     let slide = Arc::make_mut(&mut p.slides[0]);
-    // A quarter of the budget with its name: the fifth shape listing it goes over.
-    slide.shapes[0].tags = vec![t("BIG", &"x".repeat(deckcraft_pptx::MAX_TAG_BYTES / 4 - 3))];
+    // A quarter of the budget with its name and pair cost: the fifth shape listing it goes over.
+    let pair = std::mem::size_of::<(String, String)>();
+    slide.shapes[0].tags = vec![t("BIG", &"x".repeat(deckcraft_pptx::MAX_TAG_BYTES / 4 - 3 - pair))];
     let bytes = deckcraft_pptx::export(&p).expect("export");
 
     // Every shape on the first slide lists that one tags part 100 times.
@@ -78,4 +79,31 @@ fn a_tags_part_listed_many_times_is_copied_once_and_capped() {
     let tagged: Vec<_> = back.slides[0].shapes.iter().filter(|x| !x.tags.is_empty()).collect();
     assert_eq!(tagged.len(), 4, "four copies fit the budget");
     assert!(tagged.iter().all(|x| x.tags.len() == 1), "each shape keeps the part's tag once, not 100 times");
+}
+
+/// #1164: empty tags cost something too, or a part of 10,000 empty pairs listed by every shape
+/// would be copied without ever reaching the budget.
+#[test]
+fn empty_tags_count_against_the_budget() {
+    let pair = std::mem::size_of::<(String, String)>();
+    let per_shape = 10_000 * pair;
+    let shapes = deckcraft_pptx::MAX_TAG_BYTES / per_shape + 2;
+    let mut s = Session::new();
+    deckcraft_engine::sample::open_sample(&mut s).expect("sample");
+    let mut p = s.doc().expect("doc").doc.as_ref().clone();
+    let slide = Arc::make_mut(&mut p.slides[0]);
+    let template = slide.shapes[0].clone();
+    slide.shapes.clear();
+    for i in 0..shapes {
+        let mut sh = template.clone();
+        sh.id = deckcraft_model::ShapeId(10_000 + i as u32);
+        sh.ph = None;
+        sh.tags = vec![t("", ""); 10_000];
+        slide.shapes.push(sh);
+    }
+    let bytes = deckcraft_pptx::export(&p).expect("export");
+    let back = deckcraft_pptx::import(&bytes).expect("import");
+    let pairs: usize = back.slides[0].shapes.iter().map(|x| x.tags.len()).sum();
+    assert!(pairs * pair <= deckcraft_pptx::MAX_TAG_BYTES, "{pairs} pairs copied");
+    assert!(pairs < shapes * 10_000, "the budget stopped the copying");
 }
